@@ -12,4 +12,5 @@ dependencies = [
     "numpy>=2.4.4",
     "pandas>=3.0.2",
     "pooch>=1.9.0",
+    "scipy>=1.17.1",
 ]

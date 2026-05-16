@@ -1,0 +1,38 @@
+{
+  "shear_alpha": 0.14,
+  "hub_height_m": 100.0,
+  "ref_height_m": 10.0,
+  "turbine_model": "Vestas V162-6.0MW",
+  "turbine_params": {
+    "v_cin": 3.0,
+    "v_rated": 13.0,
+    "v_cout": 25.0,
+    "p_rated_kw": 6000.0
+  },
+  "air_density": {
+    "model": "ideal-gas, standard pressure (no pressure feature)",
+    "P0_Pa": 101325.0,
+    "R_d": 287.05
+  },
+  "feature_names": [
+    "temperature_c",
+    "humidity_pct",
+    "wind_dir_sin",
+    "wind_dir_cos",
+    "wind_speed_ms",
+    "icing_flag",
+    "hour_sin",
+    "hour_cos",
+    "doy_sin",
+    "doy_cos"
+  ],
+  "train_frac": 0.7,
+  "val_frac": 0.15,
+  "train_end_utc": "2024-05-26 16:06:00+00:00",
+  "val_end_utc": "2024-09-13 07:33:00+00:00",
+  "split_total_rows": {
+    "train": 300382,
+    "val": 64462,
+    "test": 64832
+  }
+}

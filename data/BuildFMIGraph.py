@@ -1,472 +1,356 @@
 #!/usr/bin/env python3
 """
-Download FMI weather observations and build a NetworkX spatial graph.
+Phase 3: graph construction for the two FL systems.
 
-Graph structure
----------------
-Each node represents one FMI weather station.
-Node attributes:
-  lat        float   – WGS84 latitude
-  lon        float   – WGS84 longitude
-  fmisid     int     – FMI station ID
-  times      np.ndarray[datetime64[s]]  – observation timestamps
-  <param>    np.ndarray[float64]        – measurements (NaN where missing)
-  <param>_unit str   – unit string for that parameter
+System A — Geographic k-NN
+    Edge rule:    k=3 nearest stations by Haversine distance,
+                  symmetrised via union (edge {i,j} if j is in N_k(i)
+                  OR i is in N_k(j)).
+    Edge weight:  Gaussian kernel A_ij = exp(-d_ij^2 / (2 σ^2)),
+                  σ = median of connected-pair distances.
+    Justification: weather systems are spatially coherent; nearby
+                   stations share wind regimes, so their local models
+                   should be close in parameter space.
 
-Edges connect each station to its k nearest neighbours (Haversine distance).
-Edge attributes:
-  distance_km  float
+System B — Correlation k-NN
+    Edge rule:    k=3 most-correlated neighbours by Pearson correlation
+                  of wind speed over the TRAINING period, symmetrised
+                  via union.
+    Edge weight:  A_ij = max(0, ρ_ij).
+    Justification: meteorological similarity rather than geographic
+                   proximity. Two coastal stations 400 km apart may
+                   share more wind behaviour than a coastal–inland
+                   pair 100 km apart.
 
-Outputs
--------
-  fmi_graph.pkl         – pickled nx.Graph (preserves numpy arrays)
-  fmi_stations_map.png  – map of Finland with station locations
+Two important pitfalls handled explicitly:
+    * Correlations are computed on TRAINING rows only (architecture
+      pitfall #3 — using full data would leak val/test info into the
+      graph structure).
+    * We correlate raw wind series, NOT power labels — correlating
+      labels would partly encode the power-curve formula into the graph.
 
-Usage
------
-python BuildFMIGraph.py --start 2025-01-01T00:00:00Z --end 2025-01-02T00:00:00Z
+Inputs:
+    data/selected_stations.json  - station metadata (fmisid, lat, lon)
+    data/dataset/<fmisid>.csv    - standardised features + split column
 
-Add --chunk-minutes 360 (default) to avoid large single responses from FMI.
-Add --k-neighbors 0 to produce a node-only graph (no edges).
+Outputs:
+    data/graphs/system_a.npz     - adjacency (n*n), fmisids array
+    data/graphs/system_b.npz
+    data/graphs/_summary.json    - graph statistics
 """
 
+from __future__ import annotations
+
 import argparse
-import datetime as dt
+import json
 import math
-import os
-import pickle
-from typing import Any, Dict, Iterable, List, Tuple
+from pathlib import Path
 
 import numpy as np
-import networkx as nx
 import pandas as pd
-import matplotlib.pyplot as plt
-import matplotlib.lines as mlines
-from fmiopendata.wfs import download_stored_query
+from scipy.sparse import csr_matrix
+from scipy.sparse.csgraph import connected_components
 
 
-# ── optional: geopandas for Finland boundary ──────────────────────────────────
-try:
-    import geopandas as gpd
-    _HAS_GPD = True
-except ImportError:
-    _HAS_GPD = False
+K_NEIGHBOURS_DEFAULT: int = 3
+MIN_CORR_OVERLAP: int = 100   # require at least this many overlapping train rows for ρ
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Time helpers
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _to_utc(t: dt.datetime) -> dt.datetime:
-    if t.tzinfo is None:
-        return t.replace(tzinfo=dt.timezone.utc)
-    return t.astimezone(dt.timezone.utc)
-
-
-def _iso_z(t: dt.datetime) -> str:
-    return _to_utc(t).isoformat(timespec="seconds").replace("+00:00", "Z")
-
-
-def _iter_chunks(
-    start: dt.datetime, end: dt.datetime, minutes: int
-) -> Iterable[Tuple[dt.datetime, dt.datetime]]:
-    delta = dt.timedelta(minutes=minutes)
-    cur = start
-    while cur < end:
-        yield cur, min(cur + delta, end)
-        cur = min(cur + delta, end)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Geography
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    R = 6371.0
+# ---------------------------------------------------------------------------
+# Geometry
+# ---------------------------------------------------------------------------
+def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    earth_r_km = 6371.0
     phi1, phi2 = math.radians(lat1), math.radians(lat2)
     dphi = math.radians(lat2 - lat1)
     dlam = math.radians(lon2 - lon1)
     a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlam / 2) ** 2
-    return 2 * R * math.asin(math.sqrt(a))
+    return 2 * earth_r_km * math.asin(math.sqrt(a))
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# FMI download
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _query_chunk(bbox: str, start: str, end: str) -> Any:
-    return download_stored_query(
-        "fmi::observations::weather::multipointcoverage",
-        args=[f"bbox={bbox}", f"starttime={start}", f"endtime={end}", "timeseries=True"],
+def haversine_matrix(lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
+    """Pairwise Haversine distances (km). Vectorised, returns dense n×n matrix."""
+    lat_r = np.radians(lat)
+    lon_r = np.radians(lon)
+    dlat = lat_r[:, None] - lat_r[None, :]
+    dlon = lon_r[:, None] - lon_r[None, :]
+    a = (
+        np.sin(dlat / 2) ** 2
+        + np.cos(lat_r[:, None]) * np.cos(lat_r[None, :]) * np.sin(dlon / 2) ** 2
     )
+    return 2 * 6371.0 * np.arcsin(np.sqrt(np.clip(a, 0, 1)))
 
 
-def download_fmi(
-    bbox: str,
-    start_dt: dt.datetime,
-    end_dt: dt.datetime,
-    chunk_minutes: int,
-) -> Dict[str, Any]:
+# ---------------------------------------------------------------------------
+# k-NN selection (works for both "smaller-is-closer" and "larger-is-closer")
+# ---------------------------------------------------------------------------
+def knn_indicator(score_matrix: np.ndarray, k: int, larger_is_closer: bool) -> np.ndarray:
     """
-    Download FMI timeseries data for all stations in bbox.
+    Return a boolean n×n indicator where row i marks the k nearest neighbours
+    of i (excluding self). NOT yet symmetrised.
 
-    Returns a dict keyed by station name:
-        {
-          'fmisid': int,
-          'lat': float,
-          'lon': float,
-          'times': [datetime, ...],
-          '<param>': {'values': [float|None, ...], 'unit': str},
-          ...
-        }
+    For Haversine: larger_is_closer=False (smaller distance = closer).
+    For correlation: larger_is_closer=True (higher ρ = more similar).
     """
-    merged: Dict[str, Any] = {}
+    n = score_matrix.shape[0]
+    indicator = np.zeros((n, n), dtype=bool)
+    for i in range(n):
+        scores = score_matrix[i].copy()
+        scores[i] = -np.inf if larger_is_closer else np.inf   # exclude self
+        if larger_is_closer:
+            nn = np.argpartition(-scores, k)[:k]
+        else:
+            nn = np.argpartition(scores, k)[:k]
+        indicator[i, nn] = True
+    return indicator
 
-    if chunk_minutes > 0:
-        chunks = list(_iter_chunks(start_dt, end_dt, chunk_minutes))
-    else:
-        chunks = [(start_dt, end_dt)]
 
-    for i, (cs, ce) in enumerate(chunks, 1):
-        cs_s, ce_s = _iso_z(cs), _iso_z(ce)
-        print(f"  [{i}/{len(chunks)}] {cs_s} → {ce_s}")
+def symmetrise_union(indicator: np.ndarray) -> np.ndarray:
+    """Symmetrise k-NN indicator: edge {i,j} if either picks the other."""
+    return indicator | indicator.T
 
-        obs = _query_chunk(bbox, cs_s, ce_s)
-        meta = obs.location_metadata  # name -> {fmisid, latitude, longitude}
 
-        for station, sdata in obs.data.items():
-            times: list = sdata.get("times", [])
-            if not times:
-                continue
+# ---------------------------------------------------------------------------
+# System A — Geographic
+# ---------------------------------------------------------------------------
+def build_system_a(
+    lat: np.ndarray, lon: np.ndarray, k: int
+) -> tuple[np.ndarray, dict]:
+    """
+    Build the geographic k-NN graph with Gaussian-kernel weights.
+    Returns (adjacency matrix, info dict).
+    """
+    D = haversine_matrix(lat, lon)
+    edge_mask = symmetrise_union(knn_indicator(D, k, larger_is_closer=False))
+    # σ = median of distances on connected pairs (upper triangle, mask=True)
+    iu = np.triu_indices_from(edge_mask, k=1)
+    connected_dists = D[iu][edge_mask[iu]]
+    sigma_km = float(np.median(connected_dists))
 
-            m = meta.get(station, {})
+    A = np.zeros_like(D)
+    W_full = np.exp(-(D ** 2) / (2.0 * sigma_km ** 2))
+    A[edge_mask] = W_full[edge_mask]
+    np.fill_diagonal(A, 0.0)
 
-            if station not in merged:
-                merged[station] = {
-                    "fmisid": m.get("fmisid"),
-                    "lat": m.get("latitude"),
-                    "lon": m.get("longitude"),
-                    "times": list(times),
-                }
-                for param, payload in sdata.items():
-                    if param == "times":
-                        continue
-                    merged[station][param] = {
-                        "values": list(payload.get("values", [])),
-                        "unit": payload.get("unit", ""),
-                    }
+    info = {
+        "type": "geographic_knn",
+        "k": k,
+        "weight_kernel": "gaussian",
+        "sigma_km": round(sigma_km, 2),
+        "distance_unit": "km",
+    }
+    return A, info
+
+
+# ---------------------------------------------------------------------------
+# System B — Correlation
+# ---------------------------------------------------------------------------
+def load_train_wind_wide(
+    fmisids: list[int], dataset_dir: Path
+) -> pd.DataFrame:
+    """
+    Load each station's training-set wind_speed_ms series and assemble
+    into a wide DataFrame (index = timestamps, columns = fmisids).
+    Outer join across stations: rows where a station has no training
+    sample show up as NaN in that column.
+    """
+    series_list = []
+    for fmisid in fmisids:
+        path = dataset_dir / f"{fmisid}.csv"
+        df = pd.read_csv(path, parse_dates=["time_utc"])
+        train = df[df["split"] == "train"][["time_utc", "wind_speed_ms"]]
+        s = train.set_index("time_utc")["wind_speed_ms"]
+        s.name = fmisid
+        series_list.append(s)
+    return pd.concat(series_list, axis=1, join="outer")
+
+
+def build_system_b(
+    fmisids: list[int],
+    dataset_dir: Path,
+    k: int,
+    min_overlap: int,
+) -> tuple[np.ndarray, dict]:
+    """
+    Build the correlation k-NN graph using training-period wind correlations.
+    Pearson is invariant to the (already applied) standardisation, so we can
+    use the standardised wind column directly.
+    """
+    wide = load_train_wind_wide(fmisids, dataset_dir)
+    n = len(fmisids)
+    corr = np.full((n, n), np.nan)
+
+    for i in range(n):
+        for j in range(i, n):
+            si = wide[fmisids[i]]
+            sj = wide[fmisids[j]]
+            both = pd.concat([si, sj], axis=1, join="inner").dropna()
+            if len(both) < min_overlap:
+                corr[i, j] = corr[j, i] = np.nan
             else:
-                merged[station]["times"].extend(times)
-                for param, payload in sdata.items():
-                    if param == "times":
-                        continue
-                    if param not in merged[station]:
-                        merged[station][param] = {
-                            "values": list(payload.get("values", [])),
-                            "unit": payload.get("unit", ""),
-                        }
-                    else:
-                        merged[station][param]["values"].extend(payload.get("values", []))
+                rho = both.iloc[:, 0].corr(both.iloc[:, 1])
+                corr[i, j] = corr[j, i] = float(rho)
 
-    return merged
+    # k-NN by correlation. NaN-pairs (insufficient overlap) treated as -inf
+    # so they never get picked as a neighbour.
+    corr_safe = np.where(np.isnan(corr), -np.inf, corr)
+    edge_mask = symmetrise_union(knn_indicator(corr_safe, k, larger_is_closer=True))
 
+    A = np.zeros((n, n))
+    pos = np.clip(corr, 0.0, None)        # max(0, ρ)
+    A[edge_mask] = pos[edge_mask]
+    A[np.isnan(A)] = 0.0
+    np.fill_diagonal(A, 0.0)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Build NetworkX graph
-# ─────────────────────────────────────────────────────────────────────────────
-
-def build_graph(station_data: Dict[str, Any], k_neighbors: int = 5) -> nx.Graph:
-    """
-    Build a NetworkX Graph from FMI station data.
-
-    Parameters
-    ----------
-    station_data:
-        Output of download_fmi().
-    k_neighbors:
-        Each station is connected to its k nearest neighbours.
-        Pass 0 to skip edge creation.
-    """
-    G = nx.Graph()
-    _SKIP = {"fmisid", "lat", "lon", "times"}
-
-    # ── add nodes ──────────────────────────────────────────────────────────
-    for name, data in station_data.items():
-        attrs: Dict[str, Any] = {
-            "lat": data.get("lat"),
-            "lon": data.get("lon"),
-            "fmisid": data.get("fmisid"),
-            "times": np.array(
-                [_to_utc(t) if isinstance(t, dt.datetime) else t for t in data.get("times", [])],
-                dtype="datetime64[s]",
-            ),
-        }
-
-        for key, val in data.items():
-            if key in _SKIP:
-                continue
-            raw = val.get("values", [])
-            attrs[key] = np.array(
-                [v if v is not None else np.nan for v in raw], dtype=np.float64
-            )
-            attrs[f"{key}_unit"] = val.get("unit", "")
-
-        G.add_node(name, **attrs)
-
-    # ── add k-NN spatial edges ─────────────────────────────────────────────
-    if k_neighbors > 0:
-        node_list = [
-            (n, d) for n, d in G.nodes(data=True)
-            if d.get("lat") is not None and d.get("lon") is not None
-        ]
-        for i, (ni, di) in enumerate(node_list):
-            dists: List[Tuple[float, str]] = []
-            for j, (nj, dj) in enumerate(node_list):
-                if i == j:
-                    continue
-                d_km = _haversine_km(di["lat"], di["lon"], dj["lat"], dj["lon"])
-                dists.append((d_km, nj))
-            dists.sort()
-            for d_km, nj in dists[:k_neighbors]:
-                if not G.has_edge(ni, nj):
-                    G.add_edge(ni, nj, distance_km=round(d_km, 2))
-
-    return G
+    info = {
+        "type": "correlation_knn",
+        "k": k,
+        "weight_kernel": "max(0, pearson_rho)",
+        "correlation_target": "wind_speed_ms (training rows only)",
+        "min_overlap_rows": min_overlap,
+    }
+    return A, info
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Plot
-# ─────────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Stats and sanity
+# ---------------------------------------------------------------------------
+def graph_stats(A: np.ndarray) -> dict:
+    """Compute descriptive statistics + sanity assertions."""
+    n = A.shape[0]
+    assert A.shape == (n, n), f"adjacency not square: {A.shape}"
+    assert np.allclose(A, A.T), "adjacency not symmetric"
+    assert (A >= 0).all(), "adjacency has negative weights"
+    assert (np.diag(A) == 0).all(), "adjacency has self-loops"
 
-def _load_finland_boundary():
-    """Return a GeoDataFrame with Finland's polygon, or None."""
-    if not _HAS_GPD:
-        return None
+    upper = A[np.triu_indices_from(A, k=1)]
+    edge_mask = upper > 0
+    n_edges = int(edge_mask.sum())
 
-    # Download (and cache) the Natural Earth 110m admin-0 countries shapefile.
-    # pooch is already a transitive dependency of geodatasets.
-    try:
-        import pooch
-        path = pooch.retrieve(
-            url="https://naciscdn.org/naturalearth/110m/cultural/ne_110m_admin_0_countries.zip",
-            known_hash=None,
-            fname="ne_110m_admin_0_countries.zip",
-            path=pooch.os_cache("fmi_graph"),
-        )
-        world = gpd.read_file(f"zip://{path}")
-        # Column name differs by version: NAME_EN, NAME, SOVEREIGNT
-        for col in ("NAME_EN", "NAME", "SOVEREIGNT", "name"):
-            if col in world.columns:
-                fi = world[world[col] == "Finland"]
-                if not fi.empty:
-                    return fi
-    except Exception as e:
-        print(f"  [warn] Could not load Finland boundary: {e}")
+    degrees = (A > 0).sum(axis=1)
+    weights_on_edges = upper[edge_mask]
 
-    return None
+    n_comp, _ = connected_components(csr_matrix(A > 0), directed=False)
+
+    return {
+        "n_nodes": int(n),
+        "n_edges": n_edges,
+        "n_components": int(n_comp),
+        "degree_min": int(degrees.min()),
+        "degree_max": int(degrees.max()),
+        "degree_mean": round(float(degrees.mean()), 2),
+        "weight_min": round(float(weights_on_edges.min()), 4) if n_edges else None,
+        "weight_max": round(float(weights_on_edges.max()), 4) if n_edges else None,
+        "weight_mean": round(float(weights_on_edges.mean()), 4) if n_edges else None,
+    }
 
 
-def plot_stations(G: nx.Graph, out_path: str, show_edges: bool = True) -> None:
-    """
-    Save a PNG map of Finland with FMI station locations.
-
-    Parameters
-    ----------
-    G:
-        Graph built by build_graph().
-    out_path:
-        Destination PNG path.
-    show_edges:
-        Whether to draw k-NN edges as light grey lines.
-    """
-    fig, ax = plt.subplots(figsize=(7, 11))
-    ax.set_facecolor("#eaf4fb")
-
-    # ── Finland boundary ───────────────────────────────────────────────────
-    fi = _load_finland_boundary()
-    if fi is not None:
-        fi.boundary.plot(ax=ax, color="#2c6fad", linewidth=1.4, zorder=2)
-        fi.plot(ax=ax, color="#d6e9f5", zorder=1)
-    else:
-        # Minimal fallback: just set reasonable axis limits
-        ax.set_xlim(18.5, 32.5)
-        ax.set_ylim(59.0, 70.5)
-        ax.text(
-            25.5, 64.5, "Finland\n(boundary unavailable;\ninstall geopandas)",
-            ha="center", va="center", fontsize=9, color="gray",
-        )
-
-    # ── k-NN edges ─────────────────────────────────────────────────────────
-    if show_edges:
-        for u, v in G.edges():
-            u_d, v_d = G.nodes[u], G.nodes[v]
-            if None not in (u_d.get("lat"), v_d.get("lat")):
-                ax.plot(
-                    [u_d["lon"], v_d["lon"]],
-                    [u_d["lat"], v_d["lat"]],
-                    color="#aaaaaa", linewidth=0.4, alpha=0.6, zorder=3,
-                )
-
-    # ── station scatter ────────────────────────────────────────────────────
-    lats, lons = [], []
-    for _, attrs in G.nodes(data=True):
-        if attrs.get("lat") is not None and attrs.get("lon") is not None:
-            lats.append(attrs["lat"])
-            lons.append(attrs["lon"])
-
-    ax.scatter(
-        lons, lats, s=22, c="#d62728", edgecolors="white", linewidths=0.4,
-        zorder=5, label=f"FMI stations  (n={len(lats)})",
+# ---------------------------------------------------------------------------
+# I/O
+# ---------------------------------------------------------------------------
+def save_graph(
+    path: Path, A: np.ndarray, fmisids: list[int], info: dict
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez(
+        path,
+        adjacency=A,
+        fmisids=np.array(fmisids, dtype=np.int64),
+        description=json.dumps(info),
     )
-
-    # ── legend / labels ────────────────────────────────────────────────────
-    station_handle = mlines.Line2D(
-        [], [], marker="o", color="w", markerfacecolor="#d62728",
-        markeredgecolor="white", markersize=7,
-        label=f"FMI stations  (n={len(lats)})",
-    )
-    boundary_handle = mlines.Line2D(
-        [], [], color="#2c6fad", linewidth=1.4, label="Finland boundary"
-    )
-    handles = [boundary_handle, station_handle] if fi is not None else [station_handle]
-    ax.legend(handles=handles, loc="lower right", fontsize=8)
-
-    ax.set_xlabel("Longitude (°E)", fontsize=9)
-    ax.set_ylabel("Latitude (°N)", fontsize=9)
-    ax.set_title("FMI Observation Stations – Finland", fontsize=11, fontweight="bold")
-    ax.grid(True, linestyle="--", linewidth=0.4, alpha=0.5)
-
-    plt.tight_layout()
-    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
-    plt.savefig(out_path, dpi=150, bbox_inches="tight")
-    plt.close()
-    print(f"  Map saved  → {out_path}")
+    print(f"  wrote {path}")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# CLI
-# ─────────────────────────────────────────────────────────────────────────────
+def load_station_metadata(path: Path) -> tuple[list[int], np.ndarray, np.ndarray, list[str]]:
+    """Flatten data/selected_stations.json into ordered arrays."""
+    selection = json.loads(path.read_text(encoding="utf-8"))
+    fmisids: list[int] = []
+    lats: list[float] = []
+    lons: list[float] = []
+    names: list[str] = []
+    for region_info in selection.values():
+        for s in region_info["stations"]:
+            fmisids.append(int(s["fmisid"]))
+            lats.append(float(s["lat"]))
+            lons.append(float(s["lon"]))
+            names.append(s["name"])
+    return fmisids, np.array(lats), np.array(lons), names
 
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 def main() -> None:
-    ap = argparse.ArgumentParser(
-        description="Download FMI weather observations and build a NetworkX spatial graph."
-    )
-    ap.add_argument(
-        "--bbox", default="19,59,32,72",
-        help="Bounding box 'minLon,minLat,maxLon,maxLat' (WGS84). Default: Finland",
-    )
-    ap.add_argument("--start", required=True, help="Start time, e.g. 2025-01-01T00:00:00Z")
-    ap.add_argument("--end",   required=True, help="End time,   e.g. 2025-01-02T00:00:00Z")
-    ap.add_argument(
-        "--chunk-minutes", type=int, default=360,
-        help="Split request into chunks of this many minutes (default: 360). Use 0 to disable.",
-    )
-    ap.add_argument(
-        "--k-neighbors", type=int, default=5,
-        help="k nearest-neighbour edges per station (default: 5). Use 0 for node-only graph.",
-    )
-    ap.add_argument(
-        "--no-edges-on-map", action="store_true",
-        help="Do not draw k-NN edges on the station map.",
-    )
-    ap.add_argument(
-        "--out-graph", default="fmi_graph.pkl",
-        help="Output path for the pickled NetworkX graph (default: fmi_graph.pkl)",
-    )
-    ap.add_argument(
-        "--out-map", default="fmi_stations_map.png",
-        help="Output path for the station map PNG (default: fmi_stations_map.png)",
-    )
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
+    ap.add_argument("--stations", default="data/selected_stations.json")
+    ap.add_argument("--dataset-dir", default="data/dataset")
+    ap.add_argument("--out-dir", default="data/graphs")
+    ap.add_argument("--k", type=int, default=K_NEIGHBOURS_DEFAULT)
+    ap.add_argument("--min-overlap", type=int, default=MIN_CORR_OVERLAP,
+                    help="Min overlapping training rows required for ρ_ij. Default: %(default)s")
     args = ap.parse_args()
 
-    start_dt = _to_utc(dt.datetime.fromisoformat(args.start.replace("Z", "+00:00")))
-    end_dt   = _to_utc(dt.datetime.fromisoformat(args.end.replace("Z",   "+00:00")))
-    if end_dt <= start_dt:
-        raise ValueError("--end must be strictly after --start")
+    fmisids, lats, lons, _names = load_station_metadata(Path(args.stations))
+    print(f"Loaded {len(fmisids)} stations from {args.stations}")
+    out_dir = Path(args.out_dir)
 
-    # ── download ───────────────────────────────────────────────────────────
-    print(f"\nDownloading FMI observations  {_iso_z(start_dt)} → {_iso_z(end_dt)}")
-    print(f"  bbox={args.bbox}  chunk={args.chunk_minutes} min")
-    station_data = download_fmi(args.bbox, start_dt, end_dt, args.chunk_minutes)
-    print(f"  Stations received: {len(station_data)}")
+    # System A
+    print(f"\nBuilding System A (geographic k={args.k} NN, Gaussian kernel)...")
+    A_geo, info_a = build_system_a(lats, lons, k=args.k)
+    stats_a = graph_stats(A_geo)
+    info_a.update(stats_a)
+    print(f"  edges:      {stats_a['n_edges']}")
+    print(f"  components: {stats_a['n_components']}")
+    print(f"  σ:          {info_a['sigma_km']:.2f} km")
+    print(f"  degree:     min={stats_a['degree_min']}, max={stats_a['degree_max']}, "
+          f"mean={stats_a['degree_mean']}")
+    print(f"  weights:    [{stats_a['weight_min']:.3f}, {stats_a['weight_max']:.3f}], "
+          f"mean={stats_a['weight_mean']:.3f}")
 
-    # ── build graph ────────────────────────────────────────────────────────
-    print(f"\nBuilding NetworkX graph  (k_neighbors={args.k_neighbors})")
-    G = build_graph(station_data, k_neighbors=args.k_neighbors)
-    print(f"  Nodes: {G.number_of_nodes()}   Edges: {G.number_of_edges()}")
+    # System B
+    print(f"\nBuilding System B (correlation k={args.k} NN, max(0,ρ) weights)...")
+    A_cor, info_b = build_system_b(
+        fmisids, Path(args.dataset_dir), k=args.k, min_overlap=args.min_overlap
+    )
+    stats_b = graph_stats(A_cor)
+    info_b.update(stats_b)
+    print(f"  edges:      {stats_b['n_edges']}")
+    print(f"  components: {stats_b['n_components']}")
+    print(f"  degree:     min={stats_b['degree_min']}, max={stats_b['degree_max']}, "
+          f"mean={stats_b['degree_mean']}")
+    print(f"  weights:    [{stats_b['weight_min']:.3f}, {stats_b['weight_max']:.3f}], "
+          f"mean={stats_b['weight_mean']:.3f}")
 
-    # ── save graph ─────────────────────────────────────────────────────────
-    os.makedirs(os.path.dirname(args.out_graph) or ".", exist_ok=True)
-    with open(args.out_graph, "wb") as fh:
-        pickle.dump(G, fh, protocol=pickle.HIGHEST_PROTOCOL)
-    print(f"  Graph saved → {args.out_graph}")
+    # Edge overlap between the two systems — how much do they agree?
+    mask_a = (A_geo > 0)
+    mask_b = (A_cor > 0)
+    edges_a = {tuple(sorted(e)) for e in zip(*np.where(mask_a))}
+    edges_b = {tuple(sorted(e)) for e in zip(*np.where(mask_b))}
+    overlap = edges_a & edges_b
+    print(f"\nEdge overlap A ∩ B: {len(overlap)} edges shared "
+          f"out of {len(edges_a)} (A) and {len(edges_b)} (B)")
 
-    # ── plot ───────────────────────────────────────────────────────────────
-    print("\nPlotting station map …")
-    plot_stations(G, args.out_map, show_edges=not args.no_edges_on_map)
+    # Save artifacts
+    print()
+    save_graph(out_dir / "system_a.npz", A_geo, fmisids, info_a)
+    save_graph(out_dir / "system_b.npz", A_cor, fmisids, info_b)
 
-    # ── summary ────────────────────────────────────────────────────────────
-    sample_name, sample_attrs = next(iter(G.nodes(data=True)))
-    params = [
-        k for k in sample_attrs
-        if k not in {"lat", "lon", "fmisid", "times"} and not k.endswith("_unit")
-    ]
-    n_obs = len(sample_attrs.get("times", []))
-    print(f"\nSample node  '{sample_name}'")
-    print(f"  lat={sample_attrs.get('lat'):.4f}  lon={sample_attrs.get('lon'):.4f}")
-    print(f"  Observations: {n_obs}")
-    print(f"  Parameters ({len(params)}): {params[:8]}")
-    if len(params) > 8:
-        print(f"    … and {len(params) - 8} more")
-
-    print("\nTo reload the graph:")
-    print("  import pickle, networkx as nx")
-    print(f"  G = pickle.load(open('{args.out_graph}', 'rb'))")
+    summary_path = out_dir / "_summary.json"
+    summary_path.write_text(
+        json.dumps(
+            {
+                "fmisids": fmisids,
+                "system_a": info_a,
+                "system_b": info_b,
+                "edge_overlap_count": len(overlap),
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    print(f"  wrote {summary_path}")
+    print("\nDone.")
 
 
 if __name__ == "__main__":
     main()
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# USAGE EXAMPLES
-# ─────────────────────────────────────────────────────────────────────────────
-# 1) One day of data, 6-hour chunks, 5 nearest neighbours per station
-#    python BuildFMIGraph.py \
-#      --start 2025-01-01T00:00:00Z \
-#      --end   2025-01-02T00:00:00Z
-#
-# 2) Node-only graph (no edges), no edge lines on map
-#    python BuildFMIGraph.py \
-#      --start 2025-01-01T00:00:00Z \
-#      --end   2025-01-01T06:00:00Z \
-#      --k-neighbors 0 --no-edges-on-map
-#
-# 3) Custom output paths
-#    python BuildFMIGraph.py \
-#      --start 2025-03-01T00:00:00Z \
-#      --end   2025-03-08T00:00:00Z \
-#      --chunk-minutes 1440 \
-#      --out-graph data/week_graph.pkl \
-#      --out-map   data/week_stations.png
-#
-# HOW TO INSPECT THE GRAPH
-# ─────────────────────────────────────────────────────────────────────────────
-# import pickle
-# import numpy as np
-# G = pickle.load(open("fmi_graph.pkl", "rb"))
-#
-# # List all nodes (stations)
-# print(list(G.nodes)[:5])
-#
-# # Access node attributes
-# node = G.nodes["Helsinki Kaisaniemi"]
-# print(node["lat"], node["lon"])
-# print(node["times"][:3])                    # numpy datetime64 array
-# print(node["Air temperature"][:10])         # numpy float64 array
-# print(node["Air temperature_unit"])
-#
-# # Iterate over edges with distance
-# for u, v, d in G.edges(data=True):
-#     print(u, "↔", v, f"  {d['distance_km']} km")
-#     break

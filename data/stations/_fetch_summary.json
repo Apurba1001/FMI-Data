@@ -1,0 +1,185 @@
+{
+  "start": "2023-01-01T00:00:00Z",
+  "end": "2025-01-01T00:00:00Z",
+  "chunk_days": 7,
+  "fmisids": [
+    101044,
+    101061,
+    101064,
+    101256,
+    101267,
+    101268,
+    101289,
+    101291,
+    101479,
+    101481,
+    101528,
+    101661,
+    101662,
+    101675,
+    101689,
+    101775,
+    101783,
+    101784,
+    101785,
+    101786,
+    101787,
+    101840,
+    101846,
+    101851,
+    107201
+  ],
+  "stations": {
+    "101044": {
+      "rows": 17543,
+      "complete_rows": 17543,
+      "completeness_pct": 100.0,
+      "path": "data\\stations\\101044.csv"
+    },
+    "101061": {
+      "rows": 17384,
+      "complete_rows": 17313,
+      "completeness_pct": 99.6,
+      "path": "data\\stations\\101061.csv"
+    },
+    "101064": {
+      "rows": 17544,
+      "complete_rows": 17539,
+      "completeness_pct": 100.0,
+      "path": "data\\stations\\101064.csv"
+    },
+    "101256": {
+      "rows": 17541,
+      "complete_rows": 17473,
+      "completeness_pct": 99.6,
+      "path": "data\\stations\\101256.csv"
+    },
+    "101267": {
+      "rows": 17518,
+      "complete_rows": 17387,
+      "completeness_pct": 99.3,
+      "path": "data\\stations\\101267.csv"
+    },
+    "101268": {
+      "rows": 17534,
+      "complete_rows": 17476,
+      "completeness_pct": 99.7,
+      "path": "data\\stations\\101268.csv"
+    },
+    "101289": {
+      "rows": 17527,
+      "complete_rows": 15862,
+      "completeness_pct": 90.5,
+      "path": "data\\stations\\101289.csv"
+    },
+    "101291": {
+      "rows": 17533,
+      "complete_rows": 17294,
+      "completeness_pct": 98.6,
+      "path": "data\\stations\\101291.csv"
+    },
+    "101479": {
+      "rows": 14624,
+      "complete_rows": 14438,
+      "completeness_pct": 98.7,
+      "path": "data\\stations\\101479.csv"
+    },
+    "101481": {
+      "rows": 17497,
+      "complete_rows": 16999,
+      "completeness_pct": 97.2,
+      "path": "data\\stations\\101481.csv"
+    },
+    "101528": {
+      "rows": 17523,
+      "complete_rows": 0,
+      "completeness_pct": 0.0,
+      "path": "data\\stations\\101528.csv"
+    },
+    "101661": {
+      "rows": 17545,
+      "complete_rows": 17543,
+      "completeness_pct": 100.0,
+      "path": "data\\stations\\101661.csv"
+    },
+    "101662": {
+      "rows": 17517,
+      "complete_rows": 17502,
+      "completeness_pct": 99.9,
+      "path": "data\\stations\\101662.csv"
+    },
+    "101675": {
+      "rows": 17545,
+      "complete_rows": 0,
+      "completeness_pct": 0.0,
+      "path": "data\\stations\\101675.csv"
+    },
+    "101689": {
+      "rows": 17543,
+      "complete_rows": 17533,
+      "completeness_pct": 99.9,
+      "path": "data\\stations\\101689.csv"
+    },
+    "101775": {
+      "rows": 17543,
+      "complete_rows": 17236,
+      "completeness_pct": 98.3,
+      "path": "data\\stations\\101775.csv"
+    },
+    "101783": {
+      "rows": 17195,
+      "complete_rows": 16803,
+      "completeness_pct": 97.7,
+      "path": "data\\stations\\101783.csv"
+    },
+    "101784": {
+      "rows": 17545,
+      "complete_rows": 17540,
+      "completeness_pct": 100.0,
+      "path": "data\\stations\\101784.csv"
+    },
+    "101785": {
+      "rows": 17544,
+      "complete_rows": 17543,
+      "completeness_pct": 100.0,
+      "path": "data\\stations\\101785.csv"
+    },
+    "101786": {
+      "rows": 17545,
+      "complete_rows": 17525,
+      "completeness_pct": 99.9,
+      "path": "data\\stations\\101786.csv"
+    },
+    "101787": {
+      "rows": 17542,
+      "complete_rows": 17447,
+      "completeness_pct": 99.5,
+      "path": "data\\stations\\101787.csv"
+    },
+    "101840": {
+      "rows": 17545,
+      "complete_rows": 17490,
+      "completeness_pct": 99.7,
+      "path": "data\\stations\\101840.csv"
+    },
+    "101846": {
+      "rows": 17544,
+      "complete_rows": 17542,
+      "completeness_pct": 100.0,
+      "path": "data\\stations\\101846.csv"
+    },
+    "101851": {
+      "rows": 17543,
+      "complete_rows": 17542,
+      "completeness_pct": 100.0,
+      "path": "data\\stations\\101851.csv"
+    },
+    "107201": {
+      "rows": 17545,
+      "complete_rows": 17333,
+      "completeness_pct": 98.8,
+      "path": "data\\stations\\107201.csv"
+    }
+  },
+  "failed_chunks": []
+}

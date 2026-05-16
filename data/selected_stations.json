@@ -1,0 +1,212 @@
+{
+  "satakunta_sw_coast": {
+    "anchor_lat": 61.6,
+    "anchor_lon": 21.4,
+    "description": "Tahkoluoto, Oosinselkä",
+    "stations": [
+      {
+        "fmisid": 101267,
+        "name": "Pori Tahkoluoto satama",
+        "lat": 61.63042,
+        "lon": 21.3762,
+        "dist_km_to_anchor": 3.6
+      },
+      {
+        "fmisid": 101064,
+        "name": "Pori rautatieasema",
+        "lat": 61.47893,
+        "lon": 21.7832,
+        "dist_km_to_anchor": 24.4
+      },
+      {
+        "fmisid": 101044,
+        "name": "Pori lentoasema",
+        "lat": 61.46011,
+        "lon": 21.80839,
+        "dist_km_to_anchor": 26.7
+      },
+      {
+        "fmisid": 101061,
+        "name": "Rauma Kylmäpihlaja",
+        "lat": 61.14475,
+        "lon": 21.30273,
+        "dist_km_to_anchor": 50.9
+      },
+      {
+        "fmisid": 101291,
+        "name": "Kankaanpää Niinisalo lentokenttä",
+        "lat": 61.83864,
+        "lon": 22.46368,
+        "dist_km_to_anchor": 62.0
+      }
+    ]
+  },
+  "ostrobothnia_coast": {
+    "anchor_lat": 62.3,
+    "anchor_lon": 21.4,
+    "description": "Pjelax-Böle 380MW",
+    "stations": [
+      {
+        "fmisid": 101256,
+        "name": "Kaskinen Sälgrund",
+        "lat": 62.33382,
+        "lon": 21.19081,
+        "dist_km_to_anchor": 11.4
+      },
+      {
+        "fmisid": 101268,
+        "name": "Kristiinankaupunki Majakka",
+        "lat": 62.20324,
+        "lon": 21.16983,
+        "dist_km_to_anchor": 16.1
+      },
+      {
+        "fmisid": 101289,
+        "name": "Kauhajoki Kuja-Kokko",
+        "lat": 62.41345,
+        "lon": 22.18372,
+        "dist_km_to_anchor": 42.4
+      },
+      {
+        "fmisid": 101479,
+        "name": "Korsnäs Bredskäret",
+        "lat": 62.93488,
+        "lon": 21.18485,
+        "dist_km_to_anchor": 71.4
+      },
+      {
+        "fmisid": 101481,
+        "name": "Maalahti Strömmingsbådan",
+        "lat": 62.97839,
+        "lon": 20.74008,
+        "dist_km_to_anchor": 82.6
+      }
+    ]
+  },
+  "central_ostrobothnia": {
+    "anchor_lat": 63.7,
+    "anchor_lon": 23.7,
+    "description": "Mutkalampi 404MW, Juurakko, Lestijärvi 455MW",
+    "stations": [
+      {
+        "fmisid": 101689,
+        "name": "Toholampi Laitala",
+        "lat": 63.82133,
+        "lon": 24.16323,
+        "dist_km_to_anchor": 26.5
+      },
+      {
+        "fmisid": 101662,
+        "name": "Kruunupyy Kokkola-Pietarsaari lentoasema",
+        "lat": 63.72655,
+        "lon": 23.14359,
+        "dist_km_to_anchor": 27.6
+      },
+      {
+        "fmisid": 101675,
+        "name": "Kokkola Santahaka",
+        "lat": 63.83882,
+        "lon": 23.09715,
+        "dist_km_to_anchor": 33.4
+      },
+      {
+        "fmisid": 101528,
+        "name": "Halsua Purola",
+        "lat": 63.44564,
+        "lon": 24.44422,
+        "dist_km_to_anchor": 46.4
+      },
+      {
+        "fmisid": 101661,
+        "name": "Kokkola Tankar",
+        "lat": 63.95114,
+        "lon": 22.84537,
+        "dist_km_to_anchor": 50.4
+      }
+    ]
+  },
+  "northern_ostrobothnia": {
+    "anchor_lat": 64.7,
+    "anchor_lon": 24.7,
+    "description": "Siikajoki 236MW",
+    "stations": [
+      {
+        "fmisid": 101785,
+        "name": "Raahe Lapaluoto satama",
+        "lat": 64.66589,
+        "lon": 24.40695,
+        "dist_km_to_anchor": 14.4
+      },
+      {
+        "fmisid": 101787,
+        "name": "Siikajoki Ruukki",
+        "lat": 64.68421,
+        "lon": 25.08919,
+        "dist_km_to_anchor": 18.6
+      },
+      {
+        "fmisid": 101784,
+        "name": "Hailuoto Marjaniemi",
+        "lat": 65.03975,
+        "lon": 24.56118,
+        "dist_km_to_anchor": 38.3
+      },
+      {
+        "fmisid": 101775,
+        "name": "Raahe Nahkiainen",
+        "lat": 64.61178,
+        "lon": 23.89674,
+        "dist_km_to_anchor": 39.5
+      },
+      {
+        "fmisid": 101786,
+        "name": "Oulu lentoasema",
+        "lat": 64.93503,
+        "lon": 25.3392,
+        "dist_km_to_anchor": 40.0
+      }
+    ]
+  },
+  "kemi_lapland": {
+    "anchor_lat": 65.7,
+    "anchor_lon": 24.5,
+    "description": "Kemin Ajos",
+    "stations": [
+      {
+        "fmisid": 101846,
+        "name": "Kemi Ajos",
+        "lat": 65.67318,
+        "lon": 24.51519,
+        "dist_km_to_anchor": 3.1
+      },
+      {
+        "fmisid": 101840,
+        "name": "Kemi Kemi-Tornio lentoasema",
+        "lat": 65.78944,
+        "lon": 24.58278,
+        "dist_km_to_anchor": 10.6
+      },
+      {
+        "fmisid": 101851,
+        "name": "Tornio Kaakkuri",
+        "lat": 65.84733,
+        "lon": 24.17369,
+        "dist_km_to_anchor": 22.1
+      },
+      {
+        "fmisid": 101783,
+        "name": "Kemi I majakka",
+        "lat": 65.38508,
+        "lon": 24.09568,
+        "dist_km_to_anchor": 39.7
+      },
+      {
+        "fmisid": 107201,
+        "name": "Tervola Loue",
+        "lat": 66.15352,
+        "lon": 24.99031,
+        "dist_km_to_anchor": 55.1
+      }
+    ]
+  }
+}
